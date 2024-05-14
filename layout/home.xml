@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <ImageView
+        android:id="@+id/logoImageView"
+        android:layout_width="wrap_content"
+        android:layout_height="50dp"
+        android:src="@drawable/logo_home2"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="30dp"
+        android:layout_marginBottom="20dp"/>
+
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/viewPager"
+        android:layout_width="match_parent"
+        android:layout_height="400dp"
+        android:layout_marginTop="80dp"
+        android:layout_marginBottom="80sp"
+        android:layout_marginStart="20dp"
+        android:layout_marginEnd="20dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/buttonLayout" />
+
+    <Button
+        android:id="@+id/matchingButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="매칭하기"
+        android:layout_marginStart="25dp"
+        android:layout_marginTop="50dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/viewPager" />
+
+    <!-- 두 번째 줄의 버튼 레이아웃 -->
+    <LinearLayout
+        android:id="@+id/buttonLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="20dp"
+        android:layout_marginBottom="30dp"
+        android:layout_marginStart="20dp"
+        android:layout_marginEnd="20dp"
+        android:gravity="center"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- 왼쪽 버튼 -->
+        <Button
+            android:id="@+id/chatButton"
+            android:layout_width="120dp"
+            android:layout_height="wrap_content"
+            android:text="채팅"
+            android:layout_marginEnd="10dp" />
+
+        <!-- 중앙 큰 버튼 -->
+        <Button
+            android:id="@+id/AItutorButton"
+            android:layout_width="100dp"
+            android:layout_height="100dp"
+            android:text="AI 튜터"
+            android:layout_marginStart="0dp"
+            android:layout_marginEnd="0dp" />
+
+        <!-- 오른쪽 버튼 -->
+        <Button
+            android:id="@+id/learningpageButton"
+            android:layout_width="120dp"
+            android:layout_height="wrap_content"
+            android:text="학습페이지"
+            android:layout_marginStart="10dp" />
+
+    </LinearLayout>
+
+
+</androidx.constraintlayout.widget.ConstraintLayout>
