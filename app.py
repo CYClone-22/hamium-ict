@@ -2,7 +2,12 @@ import logging
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.exceptions import BadRequest
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 import openai
+import spacy  # 명사 추출
+import io
+import re     # 숫자 추출
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://admin:today0430@database-1.cva6yg8oenlg.ap-northeast-2.rds.amazonaws.com/mentosdb'
@@ -10,6 +15,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True}
 db = SQLAlchemy(app)
 
 openai.api_key = 'sk-mentos-qHLdPTiXoYsq42J13McDT3BlbkFJZvXpl4ImtXbSi1eUzFEb'
+
+# spaCy 모델 로드
+nlp = spacy.load("ko_core_news_sm")  # 한글 모델
 
 @app.errorhandler(BadRequest)
 def handle_bad_request(e):
@@ -36,6 +44,67 @@ class Survey(db.Model):
     age_group = db.Column(db.Integer)
     location = db.Column(db.String(50))
     activity_level = db.Column(db.String(20))
+
+class AIChatRoom(db.Model):
+    __tablename__ = 'ai_chat_room'
+
+    id = db.Column(db.Integer, primary_key=True)
+    guest_id = db.Column(db.Integer, db.ForeignKey('guest.id'), nullable=False)
+    activity = db.Column(db.String(20))
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class AIChatMessage(db.Model):
+    __tablename__ = 'ai_chat_message'
+
+    id = db.Column(db.Integer, primary_key=True)
+    ai_chat_room_id = db.Column(db.Integer, nullable=False)  # 채팅방 ID
+    role = db.Column(db.String(20))  # 'user' or 'assistant'
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class Matching(db.Model):
+    __tablename__ = 'matching'
+
+    id = db.Column(db.Integer, primary_key=True)  # 매칭 ID
+    mentee_id = db.Column(db.Integer, db.ForeignKey('survey.guest_id'), nullable=False)  # 멘티 ID
+    mentor_id = db.Column(db.Integer, db.ForeignKey('survey.guest_id'), nullable=False)  # 멘토 ID
+    matched_at = db.Column(db.DateTime, default=db.func.current_timestamp())  # 매칭 날짜
+
+class MatchChatRoom(db.Model):
+    __tablename__ = 'match_chat_room'
+
+    id = db.Column(db.Integer, primary_key=True)
+    mentee_id = db.Column(db.Integer, db.ForeignKey('guest.id'), nullable=False)
+    mentor_id = db.Column(db.Integer, db.ForeignKey('guest.id'), nullable=False)  # 멘토 ID
+    activity = db.Column(db.String(20))
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class MatchChatMessage(db.Model):
+    __tablename__ = 'match_chat_message'
+
+    id = db.Column(db.Integer, primary_key=True)
+    match_chat_room_id = db.Column(db.Integer, db.ForeignKey('match_chat_room.id'), nullable=False)  # 채팅방 ID
+    role = db.Column(db.String(20))  # mentee or mentor
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+class Lecture(db.Model):
+    __tablename__ = 'lectures'
+    
+    lec_id = db.Column(db.Integer, primary_key=True)  # 기본 키
+    hobby = db.Column(db.String(20), nullable=False)
+    level = db.Column(db.String(20), nullable=False)
+    name = db.Column(db.String(20), nullable=False)
+
+class UserClick(db.Model):
+    __tablename__ = 'user_clicks'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    lec_id = db.Column(db.Integer, db.ForeignKey('lectures.lec_id'), nullable=False)
+    clicks = db.Column(db.Boolean, nullable=False, default=False)
+
+
 
 # 회원가입 라우트
 @app.route('/signup', methods=['GET', 'POST'])
@@ -72,7 +141,7 @@ def login():
         user = Guest.query.filter_by(email=email).first()
         if user and user.password == password:
             logger.info('Login successful for user: %s', email)
-            return jsonify({"message": "Login successful!"}), 200
+            return jsonify({"message": "Login successful!", "guest_id": user.id}), 200  # 프론트한테 게스트 아이디 넘겨줌
         else:
             logger.warning('Login failed for user: %s', email)
             return jsonify({"message": "Invalid email or password"}), 401
@@ -105,41 +174,583 @@ def survey():
     else:  # GET 요청에 대한 처리
         return jsonify({"message": "Please use POST to submit a survey."}), 200
 
-def get_openai_response(option):
-    try:
-        # GPT-3.5 Turbo API 호출
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "전문적인 기타 지식을 가진 AI 멘토입니다."},
-                {"role": "user", "content": option}
-            ]
-        )
-        return response.choices[0].message['content']
-    except Exception as e:
-        logger.error('Error in OpenAI API call: %s', str(e))
-        raise
+def determine_level(difficulty_value):
+    if difficulty_value == 1:  # '어렵다'
+        return '초보자'
+    elif difficulty_value == 2:  # '적당하다'
+        return '중급자'
+    elif difficulty_value == 3:  # '쉽다'
+        return '고급자'
+    return '초보자'  # 기본값
 
-@app.route('/chat', methods=['GET', 'POST'])
-def chat():
-    if request.method == 'POST':
+def extract_learning_subject(text):
+    # '을' 또는 '를' 조사 앞의 명사 추출
+    match = re.search(r'(\b\w+)(?:을|를)\b', text)  # 조사 제거
+    if match:
+        noun = match.group(1)  # 명사만
+        return noun
+    return None
+
+def extract_number(text):
+    match = re.search(r'\d+', text)
+    return int(match.group()) if match else None
+
+# 대화 히스토리 저장 함수    
+def save_message(chat_room_id, role, content):
+    new_message = AIChatMessage(ai_chat_room_id=chat_room_id, role=role, content=content)
+    db.session.add(new_message)
+    db.session.commit()
+
+# 대화 히스토리 불러오기 함수
+def get_chat_history(chat_room_id):
+    return AIChatMessage.query.filter_by(ai_chat_room_id=chat_room_id).order_by(AIChatMessage.timestamp).all()
+
+# 개별화된 프롬프트 생성
+def create_custom_prompt(hobby, weeks, level):
+     return (f"{hobby}을(를) 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞게 준비물과 함께 아주 간단한 주차별 학습 계획을 제공하십시오. "
+            "악기 자체는 준비물 목록에 포함되지 않아야 합니다. "
+            "주차별로 하나씩 간단한 학습 계획을 설명해 주세요. "
+            "각 주차별로 하나씩 학습 계획을 간단하게 1줄에서 2줄씩으로 설명해주세요.")
+
+# 응답 생성
+def get_response(user_input, chat_room_id):
+    # 대화 히스토리 불러오기
+    chat_history = get_chat_history(chat_room_id)
+    messages = [{"role": message.role, "content": message.content} for message in chat_history]
+    
+    # 사용자 입력 추가
+    messages.append({"role": "user", "content": user_input})
+
+    # OpenAI API 호출
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=messages
+    )
+
+    response_text = response['choices'][0]['message']['content']
+    save_message(chat_room_id, "assistant", response_text)
+    return response_text
+
+def get_custom_prompt_response(custom_prompt):
+    # OpenAI API 호출에 프롬프트 포함
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "assistant", "content": custom_prompt}
+        ]
+    )
+
+    return response['choices'][0]['message']['content']
+
+
+# AI 채팅방 생성 엔드포인트
+@app.route('/create_ai_chat_room', methods=['POST'])
+def create_ai_chat_room():
+    data = request.get_json()
+    guest_id = data.get('guest_id')
+    is_ai_chatbot = data.get('is_ai_chatbot')
+
+    if guest_id is None or is_ai_chatbot is None:
+        return jsonify({'message': 'guest_id and is_ai_chatbot are required'}), 400
+
+    if not is_ai_chatbot:
+        return jsonify({'message': 'is_ai_chatbot must be true for this endpoint'}), 400
+
+    new_chat_room = AIChatRoom(guest_id=guest_id)
+    db.session.add(new_chat_room)
+    db.session.commit()
+
+    logger.info('AI chat room created for guest_id: %s', guest_id)
+    
+    return jsonify({'chat_room_id': new_chat_room.id}), 201
+
+
+# 초기 질문 라우트
+@app.route('/start_chat', methods=['POST'])
+def start_chat():
+    try:
         data = request.get_json()
-        option = data.get('option')
-    elif request.method == 'GET':
-        option = request.args.get('option')
-    else:
-        return jsonify({"message": "Invalid request method"}), 405
+        chat_room_id = data.get("chat_room_id")
 
-    if not option:
-        return jsonify({"message": "Option is required"}), 400
+        if not chat_room_id:    # Chat Room ID가 전달되었는지 확인
+            return jsonify({"message": "Chat Room ID is required"}), 400
+
+        chat_room = AIChatRoom.query.get(chat_room_id)
+        if not chat_room:
+            return jsonify({"message": "Chat Room ID does not exist"}), 404
+        
+        # 인사 메시지와 질문 메시지를 준비
+        response = {
+            "questions": [
+                {"role": "assistant", "content": "안녕하세요, 반갑습니다. 당신의 AI 멘토입니다."},
+                {"role": "assistant", "content": "무엇을 배우고 싶으신가요?"}
+            ]
+        }
+        save_message(chat_room_id, "assistant", "안녕하세요, 반갑습니다. 당신의 AI 멘토입니다. 무엇을 배우고 싶으신가요?")
+
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"Internal Server Error: {e}")
+        return jsonify({"message": "Internal Server Error"}), 500
+
+
+# 악기 관련 여부 판별
+def classify_hobby(hobby):
+    prompt = f"{hobby}은(는) 악기 관련 취미인가요? 네 또는 아니오로 대답해 주세요."
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    answer = response['choices'][0]['message']['content'].strip().lower()
+    return "네" in answer  # 악기 관련 여부를 판별
+
+# 레벨 테스트 악보 설명 생성 함수
+def create_sheet_music_description(hobby):
+    prompt = f"{hobby}을(를) 보통 수준의 간단한 악보를 텍스트로 작성해 주세요. 음표와 간단한 연주 지침을 포함하며 , 4마디 정도의 클래식/포크(악기에 따라) 스타일로 작성해 주세요. 이 텍스트는 프론트엔드에서 실제 악보로 변환될 예정입니다."
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response['choices'][0]['message']['content']
+
+# 악기 제외 나머지 레벨 테스트
+def create_text_based_test(hobby):
+    prompt = f"{hobby}에 대한 중간 난이도의 레벨 테스트 문제를 하나 작성해 주세요. 사용자가 혼자 해결할 수 있는 실습 과제 형식으로, 이 과제를 통해 사용자의 현재 수준을 평가할 수 있도록 해주세요."
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response['choices'][0]['message']['content']
+
+
+# 사용자 응답 처리
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    chat_room_id = data.get("chat_room_id")
+    user_message = data.get("message")
+
+    if not chat_room_id:
+        app.logger.error("Chat Room ID is missing in the request.")
+        return jsonify({"message": "Chat Room ID is required"}), 400
+
+    if not user_message:
+        app.logger.error("Message is missing in the request.")
+        return jsonify({"message": "Message is required"}), 400
+
+    save_message(chat_room_id, "user", user_message)
+
+    chat_history = get_chat_history(chat_room_id)
+
+    if len(chat_history) == 2:  # 첫 번째 질문에 대한 답변이 완료된 경우
+        hobby = extract_learning_subject(user_message)
+        if hobby:
+            # 챗룸의 activity 필드 업데이트
+            chat_room = AIChatRoom.query.get(chat_room_id)
+            if chat_room:
+                chat_room.activity = hobby
+                db.session.commit()
+
+            save_message(chat_room_id, "assistant", f"{hobby}을(를) 배우고 싶으시군요. 몇 주 동안 배우고 싶으신가요?")
+            return jsonify({"response": f"{hobby}을(를) 배우고 싶으시군요. 몇 주 동안 배우고 싶으신가요?"})
+        else:
+            save_message(chat_room_id, "assistant", "취미를 정확하게 입력해 주세요.")
+            return jsonify({"response": "취미를 정확하게 입력해 주세요."})
+
+    if len(chat_history) == 4:  # 두 번째 질문에 대한 답변이 완료된 경우
+        weeks = extract_number(user_message)
+        if weeks is None:
+            return jsonify({"response": "숫자를 입력해 주세요."})
+        
+        # 난이도 테스트 문제 생성
+        hobby = extract_learning_subject(chat_history[1].content)
+        if hobby:
+            is_instrument = classify_hobby(hobby)  # 악기 관련 여부를 판별
+
+            if is_instrument:
+            # 악기 관련 레벨 테스트 (악보 생성)
+                sheet_music_description = create_sheet_music_description(hobby)
+                save_message(chat_room_id, "assistant", "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.")
+                return jsonify({"response": "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.", "sheet_music_description": sheet_music_description})  # 프론트가 설명을 받아 악보로 전환
+            else:
+                # 악기가 아닌 경우 텍스트 기반 테스트 제공
+                text_test = create_text_based_test(hobby)
+                save_message(chat_room_id, "assistant", "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.")
+                return jsonify({"response": "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.", "text_test": text_test})
+
+
+    if len(chat_history) == 6:  # 세 번째 질문에 대한 답변이 완료된 경우
+        try:
+            difficulty_value = int(user_message)  # 난이도 값을 숫자로 변환
+        except ValueError:
+            return jsonify({"response": "유효한 난이도 값을 입력해 주세요. (1: 어렵다, 2: 적당하다, 3: 쉽다)"})
+        
+        level = determine_level(difficulty_value)
+        hobby = extract_learning_subject(chat_history[1].content)
+        weeks = extract_number(chat_history[3].content)
+        custom_prompt = create_custom_prompt(hobby, weeks, level)
+
+        # 프롬프트를 `assistant` 역할로서 응답 생성
+        response_text = get_custom_prompt_response(custom_prompt)
+        print(f"Custom prompt: {custom_prompt}")
+
+        save_message(chat_room_id, "assistant", response_text)
+        return jsonify({"response": response_text})
+
+    # 그 외의 경우: OpenAI API 호출
+    response_text = get_response(user_message, chat_room_id)
+    save_message(chat_room_id, "assistant", response_text)
+    return jsonify({"response": response_text})
+
+
+# 기존 설명에 대한 구체적인 설명 (화면 전환 되고나서 처음에 한번만 이거 쓰면 됨)
+@app.route('/generate_detailed_description', methods=['POST'])
+def generate_detailed_description():
+    try:
+        data = request.get_json()
+        chat_room_id = data.get("chat_room_id")
+        response_text = data.get("response_text")
+
+        if not chat_room_id or not response_text:
+            return jsonify({"message": "Chat Room ID and response_text are required"}), 400
+
+        # 구체적인 설명을 위한 프롬프트 생성
+        prompt = (
+            f"기존 설명: {response_text}. "
+            "이 설명을 바탕으로, 주차별로 추가적인 세부 사항과 구체적인 정보를 추가하여 자세한 설명을 작성해 주세요. "
+            "각 주차별 목표는 기존 설명과 동일하게 유지되어야 합니다. "
+            "난이도와 몇 주차인지는 기존 설명에 맞춰 그대로 유지해 주세요."
+        )
+        
+        detailed_description = get_custom_prompt_response(prompt)
+        save_message(chat_room_id, "assistant", detailed_description)
+
+        return jsonify({"detailed_description": detailed_description})
+    except Exception as e:
+        app.logger.error(f"Internal Server Error: {e}")
+        return jsonify({"message": "Internal Server Error"}), 500
+
+
+
+###############   1:1 매칭 파트   ##############
+
+
+# 멘토-멘티 데이터를 불러오는 함수
+def load_data():
+    try:
+        # 설문조사 데이터를 SQLAlchemy ORM을 통해 쿼리
+        surveys = Survey.query.all()
+        # Survey 객체를 딕셔너리로 변환
+        survey_list = [
+            {
+                "id": survey.id,
+                "guest_id": survey.guest_id,
+                "role": survey.role,
+                "activity": survey.activity,
+                "experience_level": survey.experience_level,
+                "gender": survey.gender,
+                "age_group": survey.age_group,
+                "location": survey.location,
+                "activity_level": survey.activity_level
+            }
+            for survey in surveys
+        ]
+        return survey_list
+    except Exception as e:
+        app.logger.error(f"Error loading data: {e}")
+        return []
+
+# 특정 멘티 정보를 불러오는 함수
+def get_mentee_info(mentee_id):
+    try:
+        # 멘티 정보를 쿼리
+        mentee = Survey.query.filter_by(guest_id=mentee_id, role='멘티').first()
+        
+        # 멘티 정보가 존재하면 딕셔너리 형태로 변환
+        if mentee:
+            mentee_info = {
+                "id": mentee.id,
+                "guest_id": mentee.guest_id,
+                "role": mentee.role,
+                "activity": mentee.activity,
+                "experience_level": mentee.experience_level,
+                "gender": mentee.gender,
+                "age_group": mentee.age_group,
+                "location": mentee.location,
+                "activity_level": mentee.activity_level
+            }
+            return mentee_info
+        else:
+            return None
+    except Exception as e:
+        app.logger.error(f"Error retrieving mentee info: {e}")
+        return None
+
+# 매칭 함수
+def match_mentee(mentee_info, mentors):
+    try:
+        
+        # 같은 활동을 가진 멘토들 필터링
+        filtered_mentors = [mentor for mentor in mentors if mentor['activity'] == mentee_info['activity']]
+        if not filtered_mentors:
+            return []
+
+        # 멘토 점수 매기기
+        mentor_scores = []
+        for mentor in filtered_mentors:
+            score = 0
+
+            # 성별 매칭
+            if mentor['gender'] == mentee_info['gender']:
+                score += 1
+
+            # 나이대 매칭
+            if mentor['age_group'] == mentee_info['age_group']:
+                score += 1
+
+            # 지역 매칭
+            if mentor['location'] == mentee_info['location']:
+                score += 1
+
+            # 활동 수준 매칭
+            if mentor['activity_level'] == '고급':
+                score += 1
+            elif mentor['activity_level'] == '중급' and mentee_info['activity_level'] in ['초급', '중급']:
+                score += 1
+            elif mentor['activity_level'] == '초급' and mentee_info['activity_level'] == '초급':
+                score += 1
+
+            mentor_scores.append({
+                "guest_id": mentor['guest_id'],
+                "score": score
+            })
+
+        # 점수 기준으로 정렬 후 상위 3명 선택
+        top_mentors = sorted(mentor_scores, key=lambda x: x['score'], reverse=True)[:3]
+
+        # 상위 멘토들의 정보 조회
+        top_mentor_ids = [mentor['guest_id'] for mentor in top_mentors]
+        top_mentors_info = [mentor for mentor in filtered_mentors if mentor['guest_id'] in top_mentor_ids]
+
+        return top_mentors_info
+    except Exception as e:
+        logger.error(f"Error in matching mentee: {e}")
+        return []
+
+
+# 멘토 추천 라우트
+@app.route('/recommend_match', methods=['POST'])
+def recommend_match():
+    data = request.get_json()
+    guest_id = data.get('guest_id')  # 프론트 -> 멘토를 추천 받을 유저의 게스트 아이디를 줘야됨
+
+    if not guest_id:
+        return jsonify({"message": "guest_id is required"}), 400
+
+    # 멘티 정보 불러오기
+    mentee_info = get_mentee_info(guest_id)
+    if not mentee_info:
+        return jsonify({"message": f"Mentee with guest_id {guest_id} not found"}), 404
+    
+    # 전체 데이터 불러오기
+    data = load_data()
+    if not data:
+        return jsonify({"message": "No data found"}), 500
+
+    # 멘토 데이터 필터링
+    mentors = [d for d in data if d['role'] == '멘토']
+
+    # 매칭 수행
+    top_mentors = match_mentee(mentee_info, mentors)
+    if not top_mentors:
+        return jsonify({"message": "No suitable mentors found"}), 404
+
+    # 매칭된 멘토 정보를 포맷팅하여 반환
+    return jsonify({"mentors": top_mentors}), 200
+
+
+# 멘토-멘티 매칭 라우트
+@app.route('/match', methods=['POST'])
+def match():
+    data = request.get_json()
+    mentee_id = data.get('mentee_id')
+    mentor_id = data.get('mentor_id')
+
+    if not mentee_id or not mentor_id:
+        return jsonify({"message": "Both mentee_id and mentor_id are required"}), 400
 
     try:
-        assistant_message = get_openai_response(option)
-        logger.info('Chat successful with option: %s', option)
-        return jsonify({'response': assistant_message}), 200
+        # 매칭 데이터베이스에 저장
+        new_matching = Matching(
+            mentee_id=mentee_id,
+            mentor_id=mentor_id
+        )
+        db.session.add(new_matching)
+        db.session.commit()
+        return jsonify({"message": "Matching successful"}), 201
     except Exception as e:
-        logger.error('Error processing chat request: %s', str(e))
-        return jsonify({"message": "Error processing the request"}), 500
+        db.session.rollback()
+        app.logger.error(f"Error creating match: {e}")
+        return jsonify({"message": "An error occurred while creating the match"}), 500
+
+
+# 멘토-멘티 채팅방 생성  
+@app.route('/create_chat_room', methods=['POST'])
+def create_chat_room():
+    data = request.get_json()
+    mentee_id = data.get('mentee_id')
+    mentor_id = data.get('mentor_id')
+    activity = data.get('activity')
+
+    if not mentee_id or not mentor_id or not activity:
+        return jsonify({'message': 'mentee_id, mentor_id, and activity are required'}), 400
+
+    try:
+        # 매칭 정보가 존재하는지 확인
+        match = Matching.query.filter_by(mentee_id=mentee_id, mentor_id=mentor_id).first()
+        if not match:
+            return jsonify({'message': 'No matching found for the provided mentee_id and mentor_id'}), 404
+
+        # 활동 정보 가져오기
+        mentee_info = get_mentee_info(mentee_id)
+        if not mentee_info:
+            return jsonify({'message': 'Mentee information not found'}), 404
+        activity = mentee_info['activity']
+
+         # 새로운 채팅방 생성
+        new_chat_room = MatchChatRoom(
+            mentee_id=mentee_id,
+            mentor_id=mentor_id,
+            activity=activity,  # 활동 정보 저장
+        )
+        db.session.add(new_chat_room)
+        db.session.commit()
+
+        logger.info(f'New chat room created for mentee_id: {mentee_id}, mentor_id: {mentor_id}, activity: {activity}')
+
+        return jsonify({'match_chat_room_id': new_chat_room.id}), 201
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error creating chat room: {e}")
+        return jsonify({'message': 'An error occurred while creating the chat room'}), 500
+
+
+# 매칭방 메세지 저장 함수
+def save_match_message(chat_room_id, role, content):
+    new_message = MatchChatMessage(match_chat_room_id=chat_room_id, role=role, content=content)
+    db.session.add(new_message)
+    db.session.commit()
+
+# 멘토-멘티 채팅 메시지 전송
+@app.route('/send_message', methods=['POST'])
+def send_message():
+    data = request.get_json()
+    match_chat_room_id = data.get('match_chat_room_id')
+    role = data.get('role')  # 멘티 or 멘토
+    message_content = data.get('message')
+
+    if not match_chat_room_id or not role or not message_content:
+        return jsonify({'message': 'match_chat_room_id, role, and message are required'}), 400
+
+    if role not in ['멘티', '멘토']:
+        return jsonify({'message': 'Invalid role. Must be either "멘티" or "멘토".'}), 400
+    
+    # 메시지 저장
+    save_match_message(match_chat_room_id, role, message_content)
+
+    return jsonify({'message': 'Message sent successfully'}), 200
+
+
+
+######## 부가적 기능 ##########
+
+
+# 강의, 클릭 데이터 가져오기
+def get_user_clicks_and_lectures(hobby, level):
+    query = db.session.query(UserClick, Lecture).join(Lecture, UserClick.lec_id == Lecture.lec_id).filter(
+        Lecture.hobby == hobby, Lecture.level == level
+    ).all()
+    
+    clicks_data = [{'user_id': uc.user_id, 'clicks': uc.clicks, 'lec_id': uc.lec_id} for uc, _ in query]
+    return clicks_data
+
+# 매트릭스 생성
+def create_user_video_matrix(clicks_data):
+    user_dict = {}
+    lec_dict = {}
+    for data in clicks_data:
+        user_dict.setdefault(data['user_id'], {})
+        lec_dict.setdefault(data['lec_id'], {})
+        user_dict[data['user_id']][data['lec_id']] = data['clicks']
+    
+    user_ids = list(user_dict.keys())
+    lec_ids = list(lec_dict.keys())
+    user_matrix = np.zeros((len(user_ids), len(lec_ids)))
+    
+    user_id_to_index = {user_id: idx for idx, user_id in enumerate(user_ids)}
+    lec_id_to_index = {lec_id: idx for idx, lec_id in enumerate(lec_ids)}
+    
+    for user_id, lec_dict in user_dict.items():
+        for lec_id, clicks in lec_dict.items():
+            user_matrix[user_id_to_index[user_id], lec_id_to_index[lec_id]] = clicks
+    
+    return user_matrix, user_ids, lec_ids
+
+# 유사도 계산
+def calculate_similarity(user_matrix):
+    user_similarity = cosine_similarity(user_matrix)
+    return user_similarity
+
+# 특정 사용자와 유사한 사용자 찾기
+def get_similar_users(user_id, user_similarity, user_ids, n=5):
+    if user_id not in user_ids:
+        return []
+    user_idx = user_ids.index(user_id)
+    similar_users = np.argsort(-user_similarity[user_idx])[1:n+1]
+    return [user_ids[idx] for idx in similar_users]
+
+# 추천 강의
+def recommend_videos_for_user(user_id, user_matrix, user_similarity, user_ids, lec_ids, n=5):
+    if user_id not in user_ids:
+        most_clicked_videos = np.sum(user_matrix, axis=0)
+        return [lec_ids[idx] for idx in np.argsort(-most_clicked_videos)[:n]]
+    
+    similar_users = get_similar_users(user_id, user_similarity, user_ids, n)
+    similar_users_idx = [user_ids.index(u) for u in similar_users]
+    similar_users_videos = np.sum(user_matrix[similar_users_idx], axis=0)
+    user_idx = user_ids.index(user_id)
+    user_videos = user_matrix[user_idx]
+    recommendations = [lec_ids[idx] for idx in np.argsort(-similar_users_videos) if user_videos[idx] == 0]
+    
+    return recommendations[:n]
+
+
+## 강의 추천 라우트
+@app.route('/recommend_course', methods=['POST'])
+def recommend_course():
+    data = request.json
+    if 'user_id' not in data or 'hobby' not in data or 'level' not in data:
+        return jsonify({'message': 'Missing fields'}), 400
+    
+    user_id = data['user_id']
+    hobby = data['hobby']
+    level = data['level']
+    
+    clicks_data = get_user_clicks_and_lectures(hobby, level)
+    user_matrix, user_ids, lec_ids = create_user_video_matrix(clicks_data)
+    
+    if len(user_ids) == 0:
+        return jsonify({'message': 'No data available for the given hobby and level'}), 404
+    
+    user_similarity = calculate_similarity(user_matrix)
+    recommendations = recommend_videos_for_user(user_id, user_matrix, user_similarity, user_ids, lec_ids)
+    
+    return jsonify({'추천 강의': recommendations})
+
+
+## 커뮤니티
+
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
