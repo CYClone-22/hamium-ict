@@ -104,7 +104,25 @@ class UserClick(db.Model):
     lec_id = db.Column(db.Integer, db.ForeignKey('lectures.lec_id'), nullable=False)
     clicks = db.Column(db.Boolean, nullable=False, default=False)
 
+class CommunityPost(db.Model):
+    __tablename__ = 'community_post'
 
+    id = db.Column(db.Integer, primary_key=True)  # 게시글 ID
+    guest_id = db.Column(db.Integer, nullable=False)  # 게스트 또는 유저 ID
+    question = db.Column(db.Text, nullable=False)  # 게시글의 질문 내용
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())  # 질문이 작성된 시간
+
+class CommunityAnswer(db.Model):
+    __tablename__ = 'community_answer'
+
+    id = db.Column(db.Integer, primary_key=True)  # 답변 ID
+    post_id = db.Column(db.Integer, db.ForeignKey('community_post.id', ondelete="CASCADE"), nullable=False)  # 질문 게시글의 ID
+    guest_id = db.Column(db.Integer, nullable=True)  # 답변을 작성한 유저 또는 게스트의 ID
+    answer = db.Column(db.Text, nullable=False)  # 답변 내용
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())  # 답변 작성 시간
+
+
+## 라우트
 
 # 회원가입 라우트
 @app.route('/signup', methods=['GET', 'POST'])
@@ -338,8 +356,7 @@ def chat():
         app.logger.error("Message is missing in the request.")
         return jsonify({"message": "Message is required"}), 400
 
-    save_message(chat_room_id, "user", user_message)
-
+    # 이전에 메시지를 저장하지 않고 검증
     chat_history = get_chat_history(chat_room_id)
 
     if len(chat_history) == 2:  # 첫 번째 질문에 대한 답변이 완료된 경우
@@ -351,10 +368,11 @@ def chat():
                 chat_room.activity = hobby
                 db.session.commit()
 
+            save_message(chat_room_id, "user", user_message)  # 올바른 경우에만 저장
             save_message(chat_room_id, "assistant", f"{hobby}을(를) 배우고 싶으시군요. 몇 주 동안 배우고 싶으신가요?")
             return jsonify({"response": f"{hobby}을(를) 배우고 싶으시군요. 몇 주 동안 배우고 싶으신가요?"})
         else:
-            save_message(chat_room_id, "assistant", "취미를 정확하게 입력해 주세요.")
+            # 잘못된 입력 처리 (메시지를 저장하지 않음)
             return jsonify({"response": "취미를 정확하게 입력해 주세요."})
 
     if len(chat_history) == 4:  # 두 번째 질문에 대한 답변이 완료된 경우
@@ -370,11 +388,13 @@ def chat():
             if is_instrument:
             # 악기 관련 레벨 테스트 (악보 생성)
                 sheet_music_description = create_sheet_music_description(hobby)
+                save_message(chat_room_id, "user", user_message)  # 올바른 경우에만 저장
                 save_message(chat_room_id, "assistant", "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.")
                 return jsonify({"response": "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.", "sheet_music_description": sheet_music_description})  # 프론트가 설명을 받아 악보로 전환
             else:
                 # 악기가 아닌 경우 텍스트 기반 테스트 제공
                 text_test = create_text_based_test(hobby)
+                save_message(chat_room_id, "user", user_message)  # 올바른 경우에만 저장
                 save_message(chat_room_id, "assistant", "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.")
                 return jsonify({"response": "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.", "text_test": text_test})
 
@@ -392,13 +412,13 @@ def chat():
 
         # 프롬프트를 `assistant` 역할로서 응답 생성
         response_text = get_custom_prompt_response(custom_prompt)
-        print(f"Custom prompt: {custom_prompt}")
-
+        save_message(chat_room_id, "user", user_message)  # 올바른 경우에만 저장
         save_message(chat_room_id, "assistant", response_text)
         return jsonify({"response": response_text})
 
     # 그 외의 경우: OpenAI API 호출
     response_text = get_response(user_message, chat_room_id)
+    save_message(chat_room_id, "user", user_message)  # 기본적으로 사용자 메시지 저장
     save_message(chat_room_id, "assistant", response_text)
     return jsonify({"response": response_text})
 
@@ -748,8 +768,92 @@ def recommend_course():
     return jsonify({'추천 강의': recommendations})
 
 
-## 커뮤니티
+### 커뮤니티
 
+# 질문 작성 라우트
+@app.route('/community_post', methods=['POST'])
+def create_post():
+    data = request.get_json()
+    question = data.get('question')
+    guest_id = data.get('guest_id')  # 질문을 작성한 게스트의 ID
+
+    if not question or not guest_id:
+        return jsonify({"message": "Question or Guest ID is missing"}), 400
+
+    # 질문을 커뮤니티 테이블에 저장
+    new_post = CommunityPost(guest_id=guest_id, question=question)
+    db.session.add(new_post)
+    db.session.commit()
+
+    return jsonify({"post_id": new_post.id, "message": "Question posted successfully"}), 201
+
+
+# AI 답변 라우트
+@app.route('/community_ai', methods=['POST'])
+def ai_answer():
+    data = request.get_json()
+    post_id = data.get('post_id')
+
+    if not post_id:
+        return jsonify({"message": "post_id is missing"}), 400
+
+    # DB에서 post_id로 질문 조회
+    post = CommunityPost.query.get(post_id)
+    
+    if not post:
+        return jsonify({"message": "Post not found"}), 404
+
+    question = post.question  # 질문 내용 가져오기
+
+    # OpenAI에게 질문 전달
+    prompt = f"""
+    사용자가 게시판에 올린 질문입니다. 아래 질문에 대해 간결하고 정확한 답변을 작성해주세요.
+
+    질문: "{question}"
+
+    답변은 간결하게 작성해 주시고, 필요하다면 추가적인 설명이나 배경 지식도 함께 제공해 주세요.
+    """
+
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    answer = response['choices'][0]['message']['content']
+
+    # AI 답변을 CommunityAnswer 테이블에 저장
+    new_answer = CommunityAnswer(post_id=post.id, guest_id=None, answer=answer)
+    db.session.add(new_answer)
+    db.session.commit()
+
+    # 답변을 반환하거나 저장된 정보를 전달
+    return jsonify({"answer": answer})
+
+
+# 유저 답변 작성 라우트
+@app.route('/community_user', methods=['POST'])
+def user_answer():
+    data = request.get_json()
+    post_id = data.get('post_id')
+    guest_id = data.get('guest_id')  # 답변을 작성한 유저 또는 게스트의 ID
+    answer = data.get('answer')  # 유저가 작성한 답변 내용
+
+    if not post_id or not guest_id or not answer:
+        return jsonify({"message": "post_id, guest_id or answer 중에 하나 없음"}), 400
+
+    # DB에서 post_id로 질문 조회
+    post = CommunityPost.query.get(post_id)
+
+    if not post:
+        return jsonify({"message": "Post not found"}), 404
+
+    # 유저의 답변을 CommunityAnswer 테이블에 저장
+    new_answer = CommunityAnswer(post_id=post_id, guest_id=guest_id, answer=answer)
+    db.session.add(new_answer)
+    db.session.commit()
+
+    # 성공 메시지와 답변 ID 반환
+    return jsonify({"answer_id": new_answer.id, "message": "Answer posted successfully"}), 201
 
 
 if __name__ == '__main__':
