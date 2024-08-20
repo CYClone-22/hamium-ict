@@ -192,6 +192,11 @@ def survey():
     else:  # GET 요청에 대한 처리
         return jsonify({"message": "Please use POST to submit a survey."}), 200
 
+
+
+######## AI 멘토 ##########
+
+
 def determine_level(difficulty_value):
     if difficulty_value == 1:  # '어렵다'
         return '초보자'
@@ -225,10 +230,15 @@ def get_chat_history(chat_room_id):
 
 # 개별화된 프롬프트 생성
 def create_custom_prompt(hobby, weeks, level):
-     return (f"{hobby}을(를) 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞게 준비물과 함께 아주 간단한 주차별 학습 계획을 제공하십시오. "
-            "악기 자체는 준비물 목록에 포함되지 않아야 합니다. "
-            "주차별로 하나씩 간단한 학습 계획을 설명해 주세요. "
-            "각 주차별로 하나씩 학습 계획을 간단하게 1줄에서 2줄씩으로 설명해주세요.")
+    if hobby == "요리":
+        return (f"요리를 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞게 주차별 요리 학습 계획을 제공하십시오. "
+                "각 주차마다 하나의 간단한 요리를 배우는 내용을 포함하고, 필요한 재료와 도구를 함께 설명해 주세요."
+                "난이도는 현재 단계에 맞춰 점진적으로 어려워지게 해주세요.")
+    else:
+        return (f"{hobby}을(를) 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞춰 주차별 학습 계획을 세워주세요. "
+                "취미가 악기 연주와 관련된 것이라면, 악기 자체는 준비물 목록에서 제외해 주세요. "
+                "필요한 준비물도 포함해주세요. "
+                "각 주차별로 간단한 학습 계획을 1줄에서 2줄씩으로 설명해주세요.")
 
 # 응답 생성
 def get_response(user_input, chat_room_id):
@@ -359,7 +369,7 @@ def chat():
     # 이전에 메시지를 저장하지 않고 검증
     chat_history = get_chat_history(chat_room_id)
 
-    if len(chat_history) == 2:  # 첫 번째 질문에 대한 답변이 완료된 경우
+    if len(chat_history) == 1:  # 첫 번째 질문에 대한 답변이 완료된 경우
         hobby = extract_learning_subject(user_message)
         if hobby:
             # 챗룸의 activity 필드 업데이트
@@ -375,7 +385,7 @@ def chat():
             # 잘못된 입력 처리 (메시지를 저장하지 않음)
             return jsonify({"response": "취미를 정확하게 입력해 주세요."})
 
-    if len(chat_history) == 4:  # 두 번째 질문에 대한 답변이 완료된 경우
+    if len(chat_history) == 3:  # 두 번째 질문에 대한 답변이 완료된 경우
         weeks = extract_number(user_message)
         if weeks is None:
             return jsonify({"response": "숫자를 입력해 주세요."})
@@ -399,7 +409,7 @@ def chat():
                 return jsonify({"response": "난이도 테스트를 해보시고 '어렵다', '적당하다', '쉽다' 중에 하나를 선택해 주세요.", "text_test": text_test})
 
 
-    if len(chat_history) == 6:  # 세 번째 질문에 대한 답변이 완료된 경우
+    if len(chat_history) == 5:  # 세 번째 질문에 대한 답변이 완료된 경우
         try:
             difficulty_value = int(user_message)  # 난이도 값을 숫자로 변환
         except ValueError:
@@ -451,6 +461,23 @@ def generate_detailed_description():
         return jsonify({"message": "Internal Server Error"}), 500
 
 
+# 대화 기록 목록 라우트
+@app.route('/ai_chat_history/<int:chat_room_id>', methods=['GET'])
+def get_ai_chat_history(chat_room_id):
+    messages = get_chat_history(chat_room_id)
+    
+    # 메시지를 JSON으로 변환
+    chat_history = [
+        {
+            'role': message.role,
+            'content': message.content,
+            'timestamp': message.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for message in messages
+    ]
+    
+    # 클라이언트로 JSON 응답 반환
+    return jsonify(chat_history)
 
 ###############   1:1 매칭 파트   ##############
 
@@ -680,6 +707,28 @@ def send_message():
 
     return jsonify({'message': 'Message sent successfully'}), 200
 
+
+# 대화 기록 불러오기 함수
+def get_match_chat_history(match_chat_room_id):
+    return MatchChatMessage.query.filter_by(match_chat_room_id=match_chat_room_id).order_by(MatchChatMessage.timestamp).all()
+
+# 대화 기록 목록 라우트
+@app.route('/match_chat_history/<int:match_chat_room_id>', methods=['GET'])
+def get_match_chat_history_route(match_chat_room_id):
+    messages = get_match_chat_history(match_chat_room_id)
+    
+    # 메시지를 JSON으로 변환
+    chat_history = [
+        {
+            'role': message.role,
+            'content': message.content,
+            'timestamp': message.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for message in messages
+    ]
+    
+    # 클라이언트로 JSON 응답 반환
+    return jsonify(chat_history)
 
 
 ######## 부가적 기능 ##########
