@@ -62,6 +62,24 @@ class AIChatMessage(db.Model):
     content = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=db.func.current_timestamp())
 
+class WeeklyTask(db.Model):
+    __tablename__ = 'weekly_tasks'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)  # 기본 키, 자동 증가
+    chat_room_id = db.Column(db.Integer, nullable=False)  # 채팅방 ID
+    week_number = db.Column(db.Integer, nullable=False)  # 주차 번호
+    goal = db.Column(db.Text, nullable=False)  # 목표
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())  # 생성 시간
+
+class WeeklyTaskDetail(db.Model):
+    __tablename__ = 'WeeklyTaskDetail'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)  # 기본 키, 자동 증가
+    chat_room_id = db.Column(db.Integer, nullable=False)  # 채팅방 ID
+    week_number = db.Column(db.Integer, nullable=False)  # 주차 번호
+    task = db.Column(db.Text, nullable=False)  # 소과제 설명
+    created_at = db.Column(db.DateTime, server_default=db.func.current_timestamp())  # 생성 일시
+
 class Matching(db.Model):
     __tablename__ = 'matching'
 
@@ -232,13 +250,17 @@ def get_chat_history(chat_room_id):
 def create_custom_prompt(hobby, weeks, level):
     if hobby == "요리":
         return (f"요리를 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞게 주차별 요리 학습 계획을 제공하십시오. "
-                "각 주차마다 하나의 간단한 요리를 배우는 내용을 포함하고, 필요한 재료와 도구를 함께 설명해 주세요."
+                "각 주차마다 하나의 대중적인 요리를 배우는 내용을 포함하고, 필요한 재료와 도구를 아주 간단히 설명해 주세요."
+                "요리 방법은 생략해주세요."
+                "음식에 관한 배경 설명은 안하셔도 됩니다. 한글만 사용하세요"
+                "각 주차별 내용은 새로운 줄에서 시작하고, 주차별 내용 사이에 한 줄의 공백을 추가해 주세요. "
                 "난이도는 현재 단계에 맞춰 점진적으로 어려워지게 해주세요.")
     else:
         return (f"{hobby}을(를) 1주차부터 {weeks}주차까지의 과정으로 {level}단계에 맞춰 주차별 학습 계획을 세워주세요. "
                 "취미가 악기 연주와 관련된 것이라면, 악기 자체는 준비물 목록에서 제외해 주세요. "
                 "필요한 준비물도 포함해주세요. "
-                "각 주차별로 간단한 학습 계획을 1줄에서 2줄씩으로 설명해주세요.")
+                "각 주차별로 간단한 학습 계획을 1줄에서 2줄씩으로 설명해주세요."
+                "각 주차별 내용은 새로운 줄에서 시작하고, 주차별 내용 사이에 한 줄의 공백을 추가해 주세요. ")
 
 # 응답 생성
 def get_response(user_input, chat_room_id):
@@ -254,7 +276,6 @@ def get_response(user_input, chat_room_id):
         model="gpt-3.5-turbo",
         messages=messages
     )
-
     response_text = response['choices'][0]['message']['content']
     save_message(chat_room_id, "assistant", response_text)
     return response_text
@@ -433,29 +454,64 @@ def chat():
     return jsonify({"response": response_text})
 
 
+def save_weekly_goals_and_tasks(chat_room_id, detailed_description):
+    # 주차별 설명을 분리하는 정규 표현식
+    week_sections = re.split(r'(\d+주차:)', detailed_description)
+
+    # 주차 번호와 내용을 묶기
+    it = iter(week_sections)
+    week_sections = [(week.strip(), next(it).strip()) for week in it if week.strip()]
+
+    for week_number_text, section in week_sections:
+        week_number = int(week_number_text.replace('주차:', '').strip())
+
+        # 첫 줄이 "N주차: 목표 설명" 같은 형태이므로 이를 기준으로 목표를 추출
+        lines = section.split("\n")
+        goal = lines[0].strip()  # 주차별 설명을 목표로 저장
+
+        # weekly_tasks 테이블에 저장
+        weekly_task = WeeklyTask(
+            chat_room_id=chat_room_id,
+            week_number=week_number,
+            goal=goal
+        )
+        db.session.add(weekly_task)
+
+    db.session.commit()
+
 # 기존 설명에 대한 구체적인 설명 (화면 전환 되고나서 처음에 한번만 이거 쓰면 됨)
 @app.route('/generate_detailed_description', methods=['POST'])
 def generate_detailed_description():
     try:
         data = request.get_json()
         chat_room_id = data.get("chat_room_id")
-        response_text = data.get("response_text")
+        response_text = data.get("lastMessage")
 
-        if not chat_room_id or not response_text:
-            return jsonify({"message": "Chat Room ID and response_text are required"}), 400
-
+        # chat_room_id 확인
+        if chat_room_id is None:
+            return jsonify({"message": "Chat Room ID is required"}), 400
+        
+        # response_text 확인
+        if response_text is None:
+            return jsonify({"message": "Response text is required"}), 400
+        
         # 구체적인 설명을 위한 프롬프트 생성
         prompt = (
             f"기존 설명: {response_text}. "
             "이 설명을 바탕으로, 주차별로 추가적인 세부 사항과 구체적인 정보를 추가하여 자세한 설명을 작성해 주세요. "
             "각 주차별 목표는 기존 설명과 동일하게 유지되어야 합니다. "
+            "방법이나 과정을 설명해주세요"
             "난이도와 몇 주차인지는 기존 설명에 맞춰 그대로 유지해 주세요."
+            "각 주차별 내용은 새로운 줄에서 시작하고, 주차별 내용 사이에 한 줄의 공백을 추가해 주세요. "
         )
         
         detailed_description = get_custom_prompt_response(prompt)
         save_message(chat_room_id, "assistant", detailed_description)
 
+        #  주차별로 설명 파싱 및 저장
+        save_weekly_goals_and_tasks(chat_room_id, detailed_description)
         return jsonify({"detailed_description": detailed_description})
+    
     except Exception as e:
         app.logger.error(f"Internal Server Error: {e}")
         return jsonify({"message": "Internal Server Error"}), 500
@@ -478,6 +534,112 @@ def get_ai_chat_history(chat_room_id):
     
     # 클라이언트로 JSON 응답 반환
     return jsonify(chat_history)
+
+
+# 취미 대상 반환 라우트
+@app.route('/get_hobby_target', methods=['GET'])
+def get_hobby_target():
+    chat_room_id = request.args.get('chat_room_id')
+
+    if not chat_room_id:
+        return jsonify({"message": "Chat Room ID is required"}), 400
+
+    chat_room = AIChatRoom.query.get(chat_room_id)
+    
+    if not chat_room:
+        return jsonify({"message": "Chat Room not found"}), 404
+
+    hobby_target = chat_room.activity
+
+    return jsonify({"hobby_target": hobby_target})
+
+
+######### 학습 파트 #############
+
+@app.route('/weekly_goal', methods=['GET'])
+def get_weekly_goal():
+    chat_room_id = request.args.get("chat_room_id")
+    week_number = request.args.get("week_number", type=int)
+    
+    if not chat_room_id or week_number is None:
+        return jsonify({"message": "Chat Room ID and week number are required"}), 400
+
+    weekly_task = WeeklyTask.query.filter_by(chat_room_id=chat_room_id, week_number=week_number).first()
+
+    if not weekly_task:
+        return jsonify({"message": "No tasks found for the given chat room ID and week number"}), 404
+
+    # 주차별 목표에 대해 추가 설명을 요청하는 프롬프트 생성
+    prompt = (
+        f"주어진 주차별 목표: '{weekly_task.goal}'. "
+        "이 목표를 달성하기 위한 과정이나 방법을 상세히 설명해 주세요."
+    )
+
+    # GPT에게 상세 설명 요청
+    detailed_goal_description = get_custom_prompt_response(prompt)
+    
+    # 생성된 상세 설명을 저장
+    save_message(chat_room_id, "assistant", detailed_goal_description)
+
+    return jsonify({"weekly_task_description": detailed_goal_description})
+
+
+@app.route('/tasks', methods=['POST'])
+def assign_tasks():
+    try:
+        data = request.get_json()
+        chat_room_id = data.get("chat_room_id")
+        week_number = data.get("week_number", type=int)
+
+        if chat_room_id is None or week_number is None:
+            return jsonify({"message": "Chat Room ID and week number are required"}), 400
+
+        # weekly_tasks 테이블에서 해당 주차의 목표와 설명을 가져오기
+        weekly_task = WeeklyTask.query.filter_by(chat_room_id=chat_room_id, week_number=week_number).first()
+        if not weekly_task:
+            return jsonify({"message": "No tasks found for the given chat room ID and week number"}), 404
+
+        # 주차별 설명에 기반하여 소과제 리스트 생성
+        prompt = (
+            f"주어진 주차별 목표: '{weekly_task.goal}'. "
+            "이 설명을 바탕으로, 사용자가 목표를 달성하기 위해 수행할 수 있는 소과제들을 생성해 주세요. "
+            "목표를 달성하는 데 필요한 단계를 포함해야 합니다. 소과제는 3개 이상에서 6개 이하로 작성해 주세요."
+        )
+
+        # GPT에게 소과제 생성 요청
+        tasks_description = get_custom_prompt_response(prompt)
+        tasks = [task.strip() for task in tasks_description.split('\n') if task.strip()]
+
+        # 소과제를 weekly_tasks_details 테이블에 저장
+        for task in tasks:
+            if task:
+                weekly_task_detail = WeeklyTaskDetail(
+                    chat_room_id=chat_room_id,
+                    week_number=week_number,
+                    task=task
+                )
+                db.session.add(weekly_task_detail)
+
+        db.session.commit()
+
+        # 생성된 소과제들을 조회
+        tasks = WeeklyTaskDetail.query.filter_by(chat_room_id=chat_room_id, week_number=week_number).all()
+        tasks_list = [
+            {
+                'id': task.id,
+                'task': task.task,
+                'created_at': task.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            for task in tasks
+        ]
+
+        return jsonify({"tasks": tasks_list})
+
+    except Exception as e:
+        app.logger.error(f"Internal Server Error: {e}")
+        return jsonify({"message": "Internal Server Error"}), 500
+
+
 
 ###############   1:1 매칭 파트   ##############
 
