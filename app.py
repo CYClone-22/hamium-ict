@@ -569,6 +569,22 @@ def get_weekly_goal():
 
     if not weekly_task:
         return jsonify({"message": "No tasks found for the given chat room ID and week number"}), 404
+    
+    return jsonify({"weekly_goal": weekly_task.goal})
+
+
+@app.route('/weekly_task_description', methods=['GET'])
+def get_weekly_task_description():
+    chat_room_id = request.args.get("chat_room_id")
+    week_number = request.args.get("week_number", type=int)
+    
+    if not chat_room_id or week_number is None:
+        return jsonify({"message": "Chat Room ID and week number are required"}), 400
+
+    weekly_task = WeeklyTask.query.filter_by(chat_room_id=chat_room_id, week_number=week_number).first()
+
+    if not weekly_task:
+        return jsonify({"message": "No tasks found for the given chat room ID and week number"}), 404
 
     # 주차별 목표에 대해 추가 설명을 요청하는 프롬프트 생성
     prompt = (
