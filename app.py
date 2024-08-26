@@ -406,10 +406,12 @@ def create_text_based_test(hobby):
 # 챌린지 제공 함수
 def create_plan_for_chat_room(level, chat_room_id, number):
     # 레벨에 따른 단계 범위 비율 정의
+
+    # 레벨에 따른 단계 범위 비율 정의
     level_ranges = {
-        '하': (0, 0.40),
-        '중': (0.30, 0.70),
-        '상': (0.60, 1.00)
+        1: (0, 0.40),  # 하
+        2: (0.30, 0.70),  # 중
+        3: (0.60, 1.00)   # 상
     }
 
     # 단계 비율을 가져옴
@@ -482,6 +484,7 @@ def chat():
             if chat_room:
                 chat_room.activity = hobby
                 db.session.commit()
+                return jsonify({"message": "취미 대상 업데이트 완료"})
 
     #     # 난이도 테스트 문제 생성
     #         is_instrument = classify_hobby(hobby)  # 악기 관련 여부를 판별
@@ -573,7 +576,7 @@ def get_weekly_goal():
     number = request.args.get("number", type=int)  # 챌린지 개수 받기
     level = request.args.get("level", type=int)   # 유저 레벨 
 
-    if not chat_room_id or number is None:
+    if not chat_room_id or number is None or level is None:
         return jsonify({"message": "Chat Room ID and week number are required"}), 400
     
     # 해당 chat_room_id로 chat_room 레코드를 조회
@@ -588,6 +591,9 @@ def get_weekly_goal():
         # 해당 채팅룸에 속하는 모든 plan 항목 다 가져오기
         plans = Plan.query.filter_by(chat_room_id=chat_room_id).order_by(Plan.goal_number).all()
 
+        if not plans:
+            return jsonify({"message": "해당 채팅룸에 대한 계획이 없습니다."}), 404
+        
         # 모든 plan의 정보를 담을 리스트
         plan_details = []
 
