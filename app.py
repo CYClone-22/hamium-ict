@@ -35,6 +35,8 @@ class Guest(db.Model):
     password = db.Column(db.String(255), nullable=False)
     gender = db.Column(db.Enum('male', 'female'))
     birthdate = db.Column(db.Date)
+    name = db.Column(db.String(100), nullable=True)  # 이름 필드 추가
+
 
 class Survey(db.Model):
     __tablename__ = 'survey'
@@ -47,8 +49,8 @@ class Survey(db.Model):
     age_group = db.Column(db.Integer)
     location = db.Column(db.String(50))
     activity_level = db.Column(db.String(20))
-    name = db.Column(db.String(100), nullable=True)  # 이름 필드 추가
 
+    
 class AIChatRoom(db.Model):
     __tablename__ = 'ai_chat_room'
 
@@ -181,8 +183,9 @@ def signup():
         password = data['password']
         gender = data['gender']
         birthdate = data['birthdate']
+        name = data['name']
         
-        new_guest = Guest(email=email, password=password, gender=gender, birthdate=birthdate)
+        new_guest = Guest(email=email, password=password, gender=gender, birthdate=birthdate, name = name)
         db.session.add(new_guest)
         db.session.commit()
         
@@ -835,8 +838,9 @@ def assign_tasks():
 # 멘토-멘티 데이터를 불러오는 함수
 def load_data():
     try:
-        # 설문조사 데이터를 SQLAlchemy ORM을 통해 쿼리
-        surveys = Survey.query.all()
+        # Survey와 Guest 테이블을 조인하여 필요한 데이터 가져오기
+        results = db.session.query(Survey, Guest).join(Guest, Survey.guest_id == Guest.id).all()
+
         # Survey 객체를 딕셔너리로 변환
         survey_list = [
             {
@@ -848,9 +852,9 @@ def load_data():
                 "age_group": survey.age_group,
                 "location": survey.location,
                 "activity_level": survey.activity_level,
-                "name": survey.name
+                "name": guest.name  # Guest의 name 필드 추가
             }
-            for survey in surveys
+            for survey, guest in results
         ]
         return survey_list
     except Exception as e:
@@ -860,11 +864,12 @@ def load_data():
 # 특정 멘티 정보를 불러오는 함수
 def get_mentee_info(mentee_id):
     try:
-        # 멘티 정보를 쿼리
-        mentee = Survey.query.filter_by(guest_id=mentee_id, role='멘티').first()
-        
+       # Survey와 Guest 테이블을 조인하여 멘티 정보 쿼리
+        result = db.session.query(Survey, Guest).join(Guest, Survey.guest_id == Guest.id).filter(Survey.guest_id == mentee_id, Survey.role == '멘티').first()
+
         # 멘티 정보가 존재하면 딕셔너리 형태로 변환
-        if mentee:
+        if result:
+            mentee, guest = result
             mentee_info = {
                 "id": mentee.id,
                 "guest_id": mentee.guest_id,
@@ -874,7 +879,7 @@ def get_mentee_info(mentee_id):
                 "age_group": mentee.age_group,
                 "location": mentee.location,
                 "activity_level": mentee.activity_level,
-                "name": mentee.name
+                "name": guest.name  # Guest의 name 필드 추가
             }
             return mentee_info
         else:
@@ -882,7 +887,7 @@ def get_mentee_info(mentee_id):
     except Exception as e:
         app.logger.error(f"Error retrieving mentee info: {e}")
         return None
-
+    
 # 매칭 함수
 def match_mentee(mentee_info, mentors):
     try:
