@@ -35,7 +35,7 @@ class Guest(db.Model):
     password = db.Column(db.String(255), nullable=False)
     gender = db.Column(db.Enum('male', 'female'))
     birthdate = db.Column(db.Date)
-    
+    name = db.Column(db.String(100), nullable=True)  # 이름 필드 추가
 
 
 class Survey(db.Model):
@@ -231,10 +231,9 @@ def survey():
         age_group = data['age_group']
         location = data['location']
         activity_level = data['activity_level']
-        name = data['name']
         
         new_survey = Survey(guest_id=guest_id, role=role, activity=activity,  gender=gender,
-                            age_group=age_group, location=location, activity_level=activity_level, name=name)
+                            age_group=age_group, location=location, activity_level=activity_level)
         db.session.add(new_survey)
         db.session.commit()
         
@@ -852,7 +851,7 @@ def load_data():
                 "age_group": survey.age_group,
                 "location": survey.location,
                 "activity_level": survey.activity_level,
-        
+                "name": guest.name  # Guest의 name 필드 추가
             }
             for survey, guest in results
         ]
@@ -879,7 +878,7 @@ def get_mentee_info(mentee_id):
                 "age_group": mentee.age_group,
                 "location": mentee.location,
                 "activity_level": mentee.activity_level,
-            
+                "name": guest.name  # Guest의 name 필드 추가
             }
             return mentee_info
         else:
@@ -887,56 +886,56 @@ def get_mentee_info(mentee_id):
     except Exception as e:
         app.logger.error(f"Error retrieving mentee info: {e}")
         return None
-    
+
+
+# 매칭에 필요한 유틸리티 함수 추가
+def is_match(value_list, target_value):
+    return target_value in value_list
+
+
 # 매칭 함수
-def match_mentee(mentee_info, mentors):
+def match_mentee(mentee, mentors):
     try:
         
         # 같은 활동을 가진 멘토들 필터링
-        filtered_mentors = [mentor for mentor in mentors if mentor['activity'] == mentee_info['activity']]
-        if not filtered_mentors:
+        mentors = mentors[mentors['activity'].apply(lambda x: mentee['activity'] in x)]  # 취미가 같은 멘토 필터링
+        if mentors.empty:
             return []
 
-        # 멘토 점수 매기기
-        mentor_scores = []
-        for mentor in filtered_mentors:
-            score = 0
+        mentors['score'] = 0
 
-            # 성별 매칭
-            if mentor['gender'] == mentee_info['gender']:
-                score += 1
+        # 성별 매칭
+        mentors.loc[mentors['gender'] == mentee['gender'], 'score'] += 1
 
-            # 나이대 매칭
-            if mentor['age_group'] == mentee_info['age_group']:
-                score += 1
+        # 나이대 매칭
+        mentors.loc[mentors['age_group'] == mentee['age_group'], 'score'] += 1
 
-            # 지역 매칭
-            if mentor['location'] == mentee_info['location']:
-                score += 1
+        # 지역 매칭
+        mentors['location_match'] = mentors['location'].apply(
+            lambda mentor_locs: any(loc in mentee['location'] for loc in mentor_locs)
+        )
+        mentors.loc[mentors['location_match'], 'score'] += 1
+        
 
-            # 활동 수준 매칭
-            if mentor['activity_level'] == '고급':
-                score += 1
-            elif mentor['activity_level'] == '중급' and mentee_info['activity_level'] in ['초급', '중급']:
-                score += 1
-            elif mentor['activity_level'] == '초급' and mentee_info['activity_level'] == '초급':
-                score += 1
+        # 활동 수준 매칭
+        for idx, mentor in mentors.iterrows():
+            mentor_levels = mentor['activity_level']
+            mentee_level = mentee['activity_level']
+            
+            if is_match(mentor_levels, '고급'):
+                mentors.at[idx, 'score'] += 1
+            elif is_match(mentor_levels, '중급') and mentee_level in ['초급', '중급']:
+                mentors.at[idx, 'score'] += 1
+            elif is_match(mentor_levels, '초급') and mentee_level == '초급':
+                mentors.at[idx, 'score'] += 1
 
-            mentor_scores.append({
-                "guest_id": mentor['guest_id'],
-                "score": score
-            })
 
         # 점수 기준으로 정렬 후 상위 3명 선택
-        top_mentors = sorted(mentor_scores, key=lambda x: x['score'], reverse=True)[:3]
+        top_mentors = mentors.sort_values(by='score', ascending=False).head(3)
+        return top_mentors
 
-        # 상위 멘토들의 정보 조회
-        top_mentor_ids = [mentor['guest_id'] for mentor in top_mentors]
-        top_mentors_info = [mentor for mentor in filtered_mentors if mentor['guest_id'] in top_mentor_ids]
-
-        return top_mentors_info
     except Exception as e:
-        logger.error(f"Error in matching mentee: {e}")
+        app.logger.error(f"Error in matching mentee: {e}")
         return []
 
 
