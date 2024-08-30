@@ -68,6 +68,16 @@ class AIChatMessage(db.Model):
     content = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=db.func.current_timestamp())
 
+class LevelTest(db.Model):
+    __tablename__ = 'level_test'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    hobby = db.Column(db.String(50), nullable=False)
+    question_number = db.Column(db.Integer, nullable=False)  # 문제 번호 추가
+    question = db.Column(db.String(255), nullable=False)
+    answer = db.Column(db.Integer, nullable=False)  # 정답 번호
+
+
 class CookingPlan(db.Model):
     __tablename__ = 'cooking_plan'
 
@@ -85,6 +95,8 @@ class Plan(db.Model):
     cooking_plan_id = db.Column(db.Integer, db.ForeignKey('cooking_plan.id'), nullable=False)
     chat_room_id = db.Column(db.Integer, db.ForeignKey('ai_chat_room.id'), nullable=False)
     goal_number = db.Column(db.Integer, nullable=False)
+    hobby = db.Column(db.String(100), nullable=True)  # 새로운 hobby 컬럼 추가
+
 
 class Method(db.Model):
     __tablename__ = 'method'
@@ -255,6 +267,16 @@ def determine_level(difficulty_value):
     elif difficulty_value == 3:  # '쉽다'
         return '고급자'
     return '초보자'  # 기본값
+
+
+def identify_cuisine(text):
+    text = text.lower()
+    if '한식' in text:
+        return '한식 요리'
+    elif '양식' in text:
+        return '양식 요리'
+    return '요리'
+
 
 def extract_learning_subject(text):
     # '을' 또는 '를' 조사 앞의 명사 추출
@@ -445,6 +467,9 @@ def create_plan_for_chat_room(level, chat_room_id, number):
     # n개 항목을 랜덤으로 선택
     selected_plans = random.sample(filtered_plans, min(number, len(filtered_plans)))
 
+    # 선택된 계획들을 step 값 기준으로 오름차순 정렬
+    selected_plans.sort(key=lambda plan: plan.step)
+    
     # 선택된 계획을 Plan 테이블에 추가
     for idx, plan in enumerate(selected_plans, start=1):
         new_plan = Plan(
@@ -481,12 +506,20 @@ def chat():
     if len(chat_history) == 1:  # 첫 번째 질문에 대한 답변이 완료된 경우
         hobby = extract_learning_subject(user_message)
         if hobby:
+            if hobby == '요리':
+                # '요리'일 경우 '한식 요리' 또는 '양식 요리'로 세분화 / 이외는 '요리'
+                cuisine = identify_cuisine(user_message)
+                activity = cuisine
+            else:
+                activity = hobby
+
             # 챗룸의 activity 필드 업데이트
             chat_room = AIChatRoom.query.get(chat_room_id)
             if chat_room:
-                chat_room.activity = hobby
+                chat_room.activity = activity
                 db.session.commit()
-                return jsonify({"message": "취미 대상 업데이트 완료"})
+                save_message(chat_room_id, "assistant", "레벨테스트를 진행하겠습니다. 시작 버튼을 눌러 진행해주세요.")  # 올바른 경우에만 저장
+                return jsonify({"response": "레벨테스트를 진행하겠습니다. 시작 버튼을 눌러 진행해주세요."})
 
     #     # 난이도 테스트 문제 생성
     #         is_instrument = classify_hobby(hobby)  # 악기 관련 여부를 판별
@@ -571,21 +604,99 @@ def chat():
     return jsonify({"response": response_text})
 
 
+# 레벨 테스트 문제 반환 라우터
+@app.route('/get_level_test', methods=['GET'])
+def get_level_test():
+    chat_room_id = request.args.get('chat_room_id')
+    if not chat_room_id:
+        return jsonify({"message": "Chat Room ID is required"}), 400
+
+    # 해당 chat_room_id의 activity (취미) 가져오기
+    chat_room = AIChatRoom.query.get(chat_room_id)
+    if not chat_room or not chat_room.activity:
+        return jsonify({"message": "No activity found for the chat room"}), 404
+
+    hobby = chat_room.activity
+
+    # 해당 취미의 레벨 테스트 문제 5개 가져오기
+    questions = LevelTest.query.filter_by(hobby=hobby).limit(5).all()
+    if not questions:
+        return jsonify({"message": f"No questions found for the hobby: {hobby}"}), 404
+
+    response = []
+    for question in questions:
+        response.append({
+            'question_number': question.question_number,
+            'question': question.question
+        })
+
+    return jsonify({"questions": response})
+
+
+# 레벨 테스트 채점 & 레벨 지정 라우트
+@app.route('/submit_level_test', methods=['POST'])
+def submit_level_test():
+    data = request.get_json()
+    chat_room_id = data.get('chat_room_id')
+    user_answers = data.get('user_answers')  # 사용자가 선택한 답을 번호로 전달
+
+    if not chat_room_id or not user_answers or len(user_answers) != 5:
+        return jsonify({"message": "Invalid data"}), 400
+
+    # 해당 chat_room_id의 activity (취미) 가져오기
+    chat_room = AIChatRoom.query.get(chat_room_id)
+    if not chat_room or not chat_room.activity:
+        return jsonify({"message": "No activity found for the chat room"}), 404
+
+    hobby = chat_room.activity
+
+    # 해당 취미의 모든 레벨 테스트 문제 가져오기
+    questions = LevelTest.query.filter_by(hobby=hobby).all()
+    if not questions:
+        return jsonify({"message": "No questions found for the selected hobby"}), 404
+
+    score = 0
+    for question in questions:
+        question_num = question.question_number
+        correct_answer = question.answer
+
+        # 사용자가 제출한 답과 정답 비교
+        if question_num in user_answers and user_answers[question_num] == correct_answer:
+            score += 1
+
+    # 레벨 매기기 (4~5 고급자, 2-3은 중급자, 0-1은 초급자)
+    if score >= 4:
+        level = "고급"
+    elif 2 <= score < 4:
+        level = "중급"
+    else:
+        level = "초급"
+
+    return jsonify({"score": score, "level": level})
+
+
 ## 해당 채팅룸에 대한 정보 다 반환
 @app.route('/goal', methods=['GET'])
 def get_weekly_goal():
     chat_room_id = request.args.get("chat_room_id") 
-    number = request.args.get("number", type=int)  # 챌린지 개수 받기
+    number = request.args.get("challenge_number", type=int)  # 챌린지 개수 받기
     level = request.args.get("level", type=int)   # 유저 레벨 
 
-    if not chat_room_id or number is None or level is None:
-        return jsonify({"message": "Chat Room ID and week number are required"}), 400
+    if not chat_room_id:
+        return jsonify({"message": "Chat Room ID is required"}), 400
+
+    if number is None:
+        return jsonify({"message": "number is required"}), 400
+
+    if level is None:
+        return jsonify({"message": "Level is required"}), 400
+
     
     # 해당 chat_room_id로 chat_room 레코드를 조회
     chat_room = db.session.query(AIChatRoom).filter_by(id=chat_room_id).first()
 
     # 조회된 chat_room의 activity가 '요리'인지 확인
-    if chat_room and chat_room.activity == '요리':
+    if chat_room and chat_room.activity in ['요리', '한식 요리', '양식 요리']:
 
         # 해당 레벨과 개수에 맞는 랜덤 요리 계획 생성
         create_plan_for_chat_room(level, chat_room_id, number)
@@ -615,8 +726,8 @@ def get_weekly_goal():
                 "description": method.description
             } for method in methods]
 
-            # CookingPlan의 정보와 그에 해당하는 Method 리스트를 딕셔너리에 담기
-            plan_details.append({       # 리스트 안에 리스트라 생각하세요
+            # CookingPlan의 정보와 그에 해당하는 Method 딕셔너리를 담은 리스트
+            plan_details.append({       # 받고 싶은거 받으세요
                 "plan_id": plan.id,
                 "goal_number": plan.goal_number,
                 "cooking_plan": {
