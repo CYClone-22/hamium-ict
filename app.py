@@ -469,7 +469,7 @@ def create_plan_for_chat_room(level, chat_room_id, number):
 
     # 선택된 계획들을 step 값 기준으로 오름차순 정렬
     selected_plans.sort(key=lambda plan: plan.step)
-    
+
     # 선택된 계획을 Plan 테이블에 추가
     for idx, plan in enumerate(selected_plans, start=1):
         new_plan = Plan(
@@ -675,7 +675,7 @@ def submit_level_test():
     return jsonify({"score": score, "level": level})
 
 
-## 해당 채팅룸에 대한 정보 다 반환
+## 해당 채팅룸 챌린지 배정하기
 @app.route('/goal', methods=['GET'])
 def get_weekly_goal():
     chat_room_id = request.args.get("chat_room_id") 
@@ -701,58 +701,64 @@ def get_weekly_goal():
         # 해당 레벨과 개수에 맞는 랜덤 요리 계획 생성
         create_plan_for_chat_room(level, chat_room_id, number)
 
-        # 해당 채팅룸에 속하는 모든 plan 항목 다 가져오기
-        plans = Plan.query.filter_by(chat_room_id=chat_room_id).order_by(Plan.goal_number).all()
-
-        if not plans:
-            return jsonify({"message": "해당 채팅룸에 대한 계획이 없습니다."}), 404
-        
-        # 모든 plan의 정보를 담을 리스트
-        plan_details = []
-
-        for plan in plans:
-            # 각 Plan에 대해 CookingPlan 정보 가져오기
-            cooking_plan = CookingPlan.query.get(plan.cooking_plan_id)
-
-            if not cooking_plan:
-                return jsonify({"message": f"Plan ID {plan.id}에 해당하는 요리 계획을 찾을 수 없습니다."}), 404
-
-            # 해당 CookingPlan에 연결된 Method 정보를 가져오기
-            methods = Method.query.filter_by(cooking_plan_id=cooking_plan.id).order_by(Method.step_number).all()
-
-            # Method 정보를 담을 리스트
-            method_details = [{
-                "step_number": method.step_number,
-                "description": method.description
-            } for method in methods]
-
-            # CookingPlan의 정보와 그에 해당하는 Method 딕셔너리를 담은 리스트
-            plan_details.append({       # 받고 싶은거 받으세요
-                "plan_id": plan.id,
-                "goal_number": plan.goal_number,
-                "cooking_plan": {
-                    "id": cooking_plan.id,
-                    "dish_name": cooking_plan.dish_name,    # 요리 이름
-                    "ingredients": cooking_plan.ingredients,    # 재료
-                    "tools": cooking_plan.tools,    # 도구
-                    "step": cooking_plan.step,     # 은준 언니가 세운 점수임! 안 받아도 될듯
-                    "methods": method_details  # Method 정보를 담은 리스트 
-                }
-            })
-
-        # 모든 plan의 정보를 반환
-        return jsonify({"plans": plan_details})
+        return jsonify({"message": "챌린지가 성공적으로 생성되었습니다."}), 200
+    else:
+        return jsonify({"message": "요리에 대한 챌린지만 존재합니다."}), 400
     
-    # 다른 취미(임시로)
-    # else:
-        # # 프롬프트를 `assistant` 역할로서 응답 생성
-        # response_text = get_custom_prompt_response(custom_prompt)
-        # save_message(chat_room_id, "assistant", response_text)
-        # return jsonify({"response": response_text})
+        
+
+# 해당 챌린지에 대한 정보 반환
+@app.route('/Challenge', methods=['GET'])
+def get_goal_info():
+    chat_room_id = request.args.get("chat_room_id")
+    goal_number = request.args.get("goal_number", type=int)
+
+    if not chat_room_id:
+        return jsonify({"message": "Chat Room ID is required"}), 400
+
+    if goal_number is None:
+        return jsonify({"message": "Goal number is required"}), 400
+
+    # 해당 채팅룸과 목표 번호에 해당하는 plan 항목 가져오기
+    plan = Plan.query.filter_by(chat_room_id=chat_room_id, goal_number=goal_number).first()
+
+    if not plan:
+        return jsonify({"message": "해당 챌린지를 찾을 수 없습니다."}), 404
+    
+    # 해당 Plan에 대해 CookingPlan 정보 가져오기
+    cooking_plan = CookingPlan.query.get(plan.cooking_plan_id)
+
+    if not cooking_plan:
+        return jsonify({"message": f"Plan ID {plan.id}에 해당하는 요리 계획을 찾을 수 없습니다."}), 404
+
+    # 해당 CookingPlan에 연결된 Method 정보를 가져오기
+    methods = Method.query.filter_by(cooking_plan_id=cooking_plan.id).order_by(Method.step_number).all()
+
+    # Method 정보를 담을 리스트
+    method_details = [{
+        "step_number": method.step_number,
+        "description": method.description
+    } for method in methods]
+
+    # CookingPlan의 정보와 그에 해당하는 Method 딕셔너리를 담은 리스트
+    plan_detail = {       
+        "plan_id": plan.id,
+        "goal_number": plan.goal_number,
+        "cooking_plan": {
+            "id": cooking_plan.id,
+            "dish_name": cooking_plan.dish_name,    # 요리 이름
+            "ingredients": cooking_plan.ingredients,    # 재료
+            "tools": cooking_plan.tools,    # 도구
+            "methods": method_details  # Method 정보를 담은 리스트 
+        }
+    }
+
+    # 특정 goal_number에 대한 plan 정보를 반환
+    return jsonify({"plan": plan_detail}), 200
 
 
 
-#### 여기 파트는 보류 (다른 취미들 임시용)
+#### 다른 취미들 챌린지
 
 def save_weekly_goals_and_tasks(chat_room_id, detailed_description):
     # 주차별 설명을 분리하는 정규 표현식
