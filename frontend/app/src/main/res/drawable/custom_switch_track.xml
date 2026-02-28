@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!-- res/drawable/custom_switch_track.xml -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 왼쪽 상태일 때 track 색상 -->
+    <item android:state_checked="false">
+        <shape android:shape="rectangle">
+            <corners android:radius="20dp" />
+            <size android:height="30dp" />
+            <size android:width="65dp" />
+            <solid android:color="@color/colorLightPurple" />
+        </shape>
+    </item>
+    <!-- 오른쪽 상태일 때 track 색상 -->
+    <item android:state_checked="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="20dp" />
+            <size android:height="30dp" />
+            <size android:width="65dp" />
+            <solid android:color="@color/colorPurple" />
+        </shape>
+    </item>
+</selector>
