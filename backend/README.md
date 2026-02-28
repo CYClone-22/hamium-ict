@@ -18,21 +18,16 @@
 - **목표 정보 라우트(`/Challenge` )**: `chat_room_id` 와 `goal_number` 를 받아 해당 챌린지에 대한 정보 반환
 - **AI 채팅방 대화 기록 반환(`/ai_chat_history/<int:chat_room_id>`):** 해당 AI 채팅방의 대화 기록들을 DB에서 불러와서 JSON 형태로 반환함
 - **취미 대상 라우트(`/get_hobby_target`** **)** : `chat_room_id`을 받아 해당 채팅룸의 취미 대상을 반환함 (채팅방 이름에 ‘OO AI 멘토’ 띄울 목적)
-- **구체적인 설명 생성 라우트 (`/generate_detailed_description`):** 간결한 주차별 설명을 보고 사용자가 만족한다는 버튼을 누르면 같은 내용을 기반으로 자세한 주차별 설명 제공, 주차별 목표를 파싱해서 DB에 저장
 - **사용자 결과물 평가(`/test_score` ) :** ‘음성 → 악보’ 변환
 
 < 1:1 멘토멘티 관련>
 
-- **멘토 추천 라우트** (**`/recommend_match`**)**:** 프론트한테 멘티의 `guest_id`를 받아 ****설문 데이터에 가장 적합한 ****상위 3명의 멘토 정보를 반환
+- **멘토 추천 라우트** (**`/recommend_match`**)**:** 프론트한테 멘티의 `guest_id`를 받아 설문 데이터에 가장 적합한 상위 3명의 멘토 정보를 반환
 - **매칭 라우트** (**`/match`**)**:** 매칭이 성사된 `mentee_id`와 `mentor_id` 를 받아 매칭 DB에 저장
 - **멘토-멘티 채팅방 생성 (`/create_chat_room`):** 매칭된  `mentee_id` , `mentor_id` 와 취미대상을 받아 채팅방 생성 → DB에 저장
 - **멘토-멘티 채팅 메시지 전송  (`/send_message`):** 멘토-멘티 간 메시지 전송 및 저장
 - **1:1 채팅방 대화 기록 반환(`/match_chat_history/<int:match_chat_room_id>`):** 해당 AI 채팅방의 대화 기록들을 DB에서 불러와서 JSON 형태로 반환함
 
-< 학습 페이지 >
-
-- **주차별 설명 라우트(`weekly_task_description`):** `chat_room_id`와 `week_number`을 받아 해당 주차의 목표와 방법이나 설명과 함께 딕셔너리 반환~~
-- **과제 라우트(`/tasks`)**: `chat_room_id`와 `week_number`을 받아 해당 주차에 해당하는 체크 리스트에서 보여질 과제들 생성 → DB에 저장하고 리스트로 반환~~
 
 < 강의 >
 
