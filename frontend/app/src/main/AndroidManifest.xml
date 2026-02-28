@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@drawable/mentoslogo"
+        android:label="@string/app_name"
+
+        android:usesCleartextTraffic="true"
+
+        android:supportsRtl="true"
+        tools:targetApi="31"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+
+        android:screenOrientation="portrait">
+<!--        android:theme="@style/Theme.Mentos"-->
+
+<!--        android:roundIcon="@drawable/mentoslogo"-->
+
+
+
+        <activity
+            android:name="com.example.mentos.Home.SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Mentos.FullScreen"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name=".Login.LoginActivity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Home.Nav_main"
+                  android:theme="@style/Theme.Mentos"
+            android:screenOrientation="portrait"/>
+
+        <activity android:name=".Login.SigninActivity"
+            android:screenOrientation="portrait"/>
+
+        <activity android:name=".Community.main.CommunityActivity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Community.PostActivity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Community.comment.CommentActivity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Community.WritingBoard"
+            android:screenOrientation="portrait"/>
+
+
+
+
+
+        <activity android:name=".Chat.ChatActivity"
+            android:screenOrientation="portrait"/>
+
+        <activity android:name=".Match.Survey.SurveyGuideActivity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Match.Survey.SurveyGuideActivity2"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Match.Survey.Survey_Mentor_Activity"
+            android:screenOrientation="portrait"/>
+        <activity android:name=".Match.Survey.Survey_Mentee_Activity"
+            android:screenOrientation="portrait"/>
+
+        <activity android:name=".Match.Popular.PopularActivity"
+            android:screenOrientation="portrait"/>
+
+        <activity android:name=".AI.AIMainChatActivity"
+            android:screenOrientation="portrait"/>
+
+
+    </application>
+
+</manifest>
